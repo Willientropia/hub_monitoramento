@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestão de Clientes Solares</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-auth.js";
+        import { getFirestore, collection, doc, addDoc, setDoc, onSnapshot, query, serverTimestamp, updateDoc, where, getDocs } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+
+        // A configuração do Firebase será injetada aqui pelo ambiente
+        const firebaseConfig = {
+            apiKey: "AIzaSyBkzz0CflvDNXcoa30-_fSIwD62SBF29SQ",
+            authDomain: "hubmonitoramento.firebaseapp.com",
+            projectId: "hubmonitoramento",
+            storageBucket: "hubmonitoramento.appspot.com",
+            messagingSenderId: "828068813283",
+            appId: "1:828068813283:web:f2a3f64efeff8a7f88e8d6",
+            measurementId: "G-QF0ETTB8Y2"
+        };
+
+        // Disponibiliza as funções do Firebase globalmente para o React
+        window.firebase = {
+            app: initializeApp(firebaseConfig),
+            getAuth,
+            signInAnonymously,
+            onAuthStateChanged,
+            getFirestore,
+            collection,
+            doc,
+            addDoc,
+            setDoc,
+            onSnapshot,
+            query,
+            serverTimestamp,
+            updateDoc,
+            where,
+            getDocs
+        };
+    </script>
+
+    <style>
+        /* Estilos personalizados para complementar o Tailwind */
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        .tab-active {
+            border-color: #4f46e5;
+            color: #4f46e5;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+
+        // --- Componente Principal ---
+        function App() {
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [clients, setClients] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [authReady, setAuthReady] = useState(false);
+            const [userId, setUserId] = useState(null);
+            
+            // Inicialização do Firebase e Autenticação
+            useEffect(() => {
+                if (!window.firebase) return;
+                const { getAuth, onAuthStateChanged, signInAnonymously } = window.firebase;
+                const auth = getAuth();
+                
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        setUserId(user.uid);
+                    } else {
+                        signInAnonymously(auth).catch(error => console.error("Erro no login anônimo:", error));
+                    }
+                    setAuthReady(true);
+                });
+            }, []);
+
+            // Carregamento de dados do Firestore em tempo real
+            useEffect(() => {
+                if (!authReady || !userId) return;
+
+                setLoading(true);
+                const { getFirestore, collection, query, onSnapshot } = window.firebase;
+                const db = getFirestore();
+                const q = query(collection(db, `solar-clients/${userId}/clients`));
+
+                const unsubscribe = onSnapshot(q, (querySnapshot) => {
+                    const clientsData = [];
+                    querySnapshot.forEach((doc) => {
+                        const data = doc.data();
+                        
+                        // ===== INÍCIO DA CORREÇÃO =====
+                        // Converte o timestamp do Firebase para uma string de data legível
+                        let installDateStr = data.installDate;
+                        if (installDateStr && typeof installDateStr.toDate === 'function') {
+                            installDateStr = installDateStr.toDate().toLocaleDateString('pt-BR', {
+                                day: '2-digit', month: '2-digit', year: 'numeric'
+                            });
+                        }
+                        // ===== FIM DA CORREÇÃO =====
+
+                        clientsData.push({ 
+                            id: doc.id, 
+                            ...data,
+                            installDate: installDateStr // Usa a data já formatada
+                        });
+                    });
+                    
+                    const processedClients = clientsData.map(client => ({
+                        ...client,
+                        status: calculateStatus(client.installDate, client.status)
+                    }));
+
+                    setClients(processedClients);
+                    setLoading(false);
+                }, (error) => {
+                    console.error("Erro ao buscar clientes:", error);
+                    setLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, [authReady, userId]);
+
+            const calculateStatus = (installDateStr, currentStatus) => {
+                // Se já tem um status de monitoramento específico, mantém
+                if (['monitoring', 'recurring_maintenance', 'om_complete'].includes(currentStatus)) {
+                    return currentStatus;
+                }
+
+                if (!installDateStr || typeof installDateStr !== 'string') {
+                    return 'expired';
+                }
+                
+                const parts = installDateStr.split('/');
+                if (parts.length !== 3) return 'expired';
+
+                const installDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+                const today = new Date();
+                const oneYearLater = new Date(installDate);
+                oneYearLater.setFullYear(installDate.getFullYear() + 1);
+
+                return today <= oneYearLater ? 'active' : 'expired';
+            };
+
+            const stats = useMemo(() => {
+                return {
+                    total: clients.length,
+                    active: clients.filter(c => c.status === 'active').length,
+                    expired: clients.filter(c => c.status === 'expired').length,
+                    monitoring: clients.filter(c => c.status === 'monitoring').length,
+                    recurring_maintenance: clients.filter(c => c.status === 'recurring_maintenance').length,
+                    om_complete: clients.filter(c => c.status === 'om_complete').length
+                };
+            }, [clients]);
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <header className="bg-white shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+                            <h1 className="text-2xl font-bold text-gray-800 flex items-center">
+                                <span className="text-3xl mr-3">☀️</span>
+                                Gestão de Clientes Solares
+                            </h1>
+                            {userId && <span className="text-xs text-gray-400">ID do Usuário: {userId}</span>}
+                        </div>
+                    </header>
+
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                        <div className="border-b border-gray-200">
+                            <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+                                <Tab id="dashboard" activeTab={activeTab} setActiveTab={setActiveTab} count={null}>Dashboard</Tab>
+                                <Tab id="clients" activeTab={activeTab} setActiveTab={setActiveTab} count={stats.total}>Clientes</Tab>
+                                <Tab id="import" activeTab={activeTab} setActiveTab={setActiveTab}>Importar</Tab>
+                            </nav>
+                        </div>
+                    </div>
+
+                    <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                        {loading && <div className="text-center p-10">Carregando dados...</div>}
+                        {!loading && activeTab === 'dashboard' && <Dashboard stats={stats} clients={clients} />}
+                        {!loading && activeTab === 'clients' && <ClientView clients={clients} userId={userId} />}
+                        {!loading && activeTab === 'import' && <ImportView userId={userId} setActiveTab={setActiveTab} />}
+                    </main>
+                </div>
+            );
+        }
+
+        // --- Componentes de UI ---
+        const Tab = ({ id, activeTab, setActiveTab, count, children }) => (
+            <button
+                onClick={() => setActiveTab(id)}
+                className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors duration-200
+                    ${activeTab === id ? 'tab-active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`
+                }
+            >
+                {children} {count !== null && <span className="bg-gray-200 text-gray-600 rounded-full px-2 py-0.5 ml-2">{count}</span>}
+            </button>
+        );
+
+        const Dashboard = ({ stats, clients }) => {
+            const totalPower = useMemo(() => {
+                return clients.reduce((sum, client) => {
+                    const power = parseFloat(String(client.power || '0').replace(',', '.')) || 0;
+                    return sum + power;
+                }, 0).toFixed(2);
+            }, [clients]);
+
+            return (
+                <div className="space-y-8">
+                    <h2 className="text-2xl font-semibold text-gray-700">Visão Geral</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <StatCard title="Total de Clientes" value={stats.total} color="text-indigo-600" />
+                        <StatCard title="Em Garantia" value={stats.active} color="text-green-600" />
+                        <StatCard title="Garantia Expirada" value={stats.expired} color="text-red-600" />
+                        <StatCard title="Monitoramento" value={stats.monitoring} color="text-blue-600" />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                        <StatCard title="Manutenção Recorrente" value={stats.recurring_maintenance} color="text-purple-600" />
+                        <StatCard title="O&M Completo" value={stats.om_complete} color="text-orange-600" />
+                    </div>
+                    <div className="bg-white p-6 rounded-lg shadow">
+                         <h3 className="text-lg font-medium text-gray-900">Potência Total Instalada</h3>
+                         <p className="mt-2 text-4xl font-bold text-indigo-600">{totalPower} kWp</p>
+                    </div>
+                </div>
+            );
+        };
+
+        const StatCard = ({ title, value, color }) => (
+            <div className="bg-white p-6 rounded-lg shadow">
+                <h3 className="text-sm font-medium text-gray-500 truncate">{title}</h3>
+                <p className={`mt-1 text-3xl font-semibold ${color}`}>{value}</p>
+            </div>
+        );
+
+        const ClientView = ({ clients, userId }) => {
+            const [searchTerm, setSearchTerm] = useState('');
+            const [filterStatus, setFilterStatus] = useState('all');
+            const [selectedClient, setSelectedClient] = useState(null);
+
+            const filteredClients = useMemo(() => {
+                return clients.filter(client => {
+                    const name = typeof client.name === 'string' ? client.name : '';
+                    const address = typeof client.address === 'string' ? client.address : '';
+                    const clientNumber = String(client.clientNumber || '');
+                    const searchLower = searchTerm.toLowerCase();
+                    
+                    const matchesSearch = name.toLowerCase().includes(searchLower) ||
+                                        address.toLowerCase().includes(searchLower) ||
+                                        clientNumber.toLowerCase().includes(searchLower);
+                    const matchesFilter = filterStatus === 'all' || client.status === filterStatus;
+                    return matchesSearch && matchesFilter;
+                }).sort((a, b) => {
+                    // Ordena por número do cliente (clientNumber)
+                    const numA = parseInt(String(a.clientNumber || '0')) || 0;
+                    const numB = parseInt(String(b.clientNumber || '0')) || 0;
+                    return numA - numB;
+                });
+            }, [clients, searchTerm, filterStatus]);
+
+            return (
+                <div className="space-y-6">
+                    <div className="md:flex justify-between items-center space-y-4 md:space-y-0">
+                        <input
+                            type="text"
+                            placeholder="🔍 Buscar por nº, nome ou endereço..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full md:w-1/3 p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                        <div className="flex space-x-2 overflow-x-auto pb-2">
+                            <FilterButton current={filterStatus} status="all" setStatus={setFilterStatus}>Todos</FilterButton>
+                            <FilterButton current={filterStatus} status="active" setStatus={setFilterStatus}>Em Garantia</FilterButton>
+                            <FilterButton current={filterStatus} status="expired" setStatus={setFilterStatus}>Expirada</FilterButton>
+                            <FilterButton current={filterStatus} status="monitoring" setStatus={setFilterStatus}>Monitoramento</FilterButton>
+                            <FilterButton current={filterStatus} status="recurring_maintenance" setStatus={setFilterStatus}>Manutenção Recorrente</FilterButton>
+                            <FilterButton current={filterStatus} status="om_complete" setStatus={setFilterStatus}>O&M Completo</FilterButton>
+                        </div>
+                    </div>
+                    
+                    {filteredClients.length > 0 ? (
+                        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                            {filteredClients.map(client => (
+                                <ClientCard key={client.id} client={client} onDetailsClick={() => setSelectedClient(client)} />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="text-center py-12 bg-white rounded-lg shadow">
+                            <p className="text-gray-500">Nenhum cliente encontrado com os filtros atuais.</p>
+                        </div>
+                    )}
+
+                    {selectedClient && (
+                         <ClientDetailModal 
+                            client={selectedClient} 
+                            onClose={() => setSelectedClient(null)} 
+                            userId={userId}
+                         />
+                    )}
+                </div>
+            );
+        };
+
+        const FilterButton = ({ current, status, setStatus, children }) => (
+            <button
+                onClick={() => setStatus(status)}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors duration-200 ${
+                    current === status ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+            >
+                {children}
+            </button>
+        );
+
+        const ClientCard = ({ client, onDetailsClick }) => {
+            const statusStyles = {
+                active: { bg: 'bg-green-100', text: 'text-green-800', label: 'Em Garantia' },
+                expired: { bg: 'bg-red-100', text: 'text-red-800', label: 'Garantia Expirada' },
+                monitoring: { bg: 'bg-blue-100', text: 'text-blue-800', label: 'Monitoramento' },
+                recurring_maintenance: { bg: 'bg-purple-100', text: 'text-purple-800', label: 'Manutenção Recorrente' },
+                om_complete: { bg: 'bg-orange-100', text: 'text-orange-800', label: 'O&M Completo' }
+            };
+            const style = statusStyles[client.status] || statusStyles.expired;
+
+            return (
+                <div className="bg-white rounded-lg shadow-md p-5 flex flex-col justify-between hover:shadow-lg transition-shadow duration-300">
+                    <div>
+                        <div className="flex justify-between items-start mb-3">
+                            <h3 className="text-lg font-bold text-gray-800 pr-2">
+                                {client.clientNumber ? `${client.clientNumber} - ` : ''}{client.name || 'Nome não informado'}
+                            </h3>
+                            <span className={`px-3 py-1 text-xs font-semibold rounded-full ${style.bg} ${style.text}`}>{style.label}</span>
+                        </div>
+                        <div className="space-y-2 text-sm text-gray-600">
+                            <p><strong>📍 Local:</strong> {client.address || 'N/A'}</p>
+                            <p><strong>📅 Instalação:</strong> {client.installDate || 'N/A'}</p>
+                            <p><strong>⚡ Potência:</strong> {client.power || 'N/A'} kWp</p>
+                        </div>
+                    </div>
+                    <div className="mt-5 pt-4 border-t border-gray-100">
+                        <button 
+                            onClick={onDetailsClick}
+                            className="w-full bg-indigo-500 text-white px-4 py-2 rounded-md font-semibold hover:bg-indigo-600 transition-colors duration-200"
+                        >
+                            Ver Detalhes e Histórico
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ImportView = ({ userId, setActiveTab }) => {
+            const [fileName, setFileName] = useState('');
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [error, setError] = useState('');
+            const [success, setSuccess] = useState('');
+            const [processedCount, setProcessedCount] = useState(0);
+
+            const handleFileUpload = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                setFileName(file.name);
+                setIsProcessing(true);
+                setError('');
+                setSuccess('');
+                setProcessedCount(0);
+
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                        const jsonData = XLSX.utils.sheet_to_json(firstSheet, {
+                            header: ["id_col", "installDate", "name", "address", "panels", "power"],
+                            range: 1 
+                        });
+
+                        const { getFirestore, collection, addDoc, setDoc, doc, serverTimestamp, query, where, getDocs } = window.firebase;
+                        const db = getFirestore();
+                        
+                        let successCount = 0;
+                        let errorCount = 0;
+                        
+                        for (const row of jsonData) {
+                            try {
+                                // Validar e converter datas do Excel
+                                let installDateStr = '';
+                                
+                                if (row.installDate) {
+                                    // Se for um número serial do Excel, converter para data
+                                    if (typeof row.installDate === 'number') {
+                                        const excelDate = new Date((row.installDate - 25569) * 86400 * 1000);
+                                        if (!isNaN(excelDate.getTime())) {
+                                            installDateStr = excelDate.toLocaleDateString('pt-BR', {
+                                                day: '2-digit', 
+                                                month: '2-digit', 
+                                                year: 'numeric'
+                                            });
+                                        }
+                                    }
+                                    // Se for uma string, tentar converter
+                                    else if (typeof row.installDate === 'string') {
+                                        const cleanDateStr = row.installDate.trim();
+                                        
+                                        // Tentar formato DD/MM/YYYY
+                                        const parts = cleanDateStr.split('/');
+                                        if (parts.length === 3 && parts[0].length <= 2 && parts[1].length <= 2 && parts[2].length === 4) {
+                                            const testDate = new Date(`${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`);
+                                            if (!isNaN(testDate.getTime()) && testDate.getFullYear() > 1900 && testDate.getFullYear() < 2100) {
+                                                installDateStr = cleanDateStr;
+                                            }
+                                        }
+                                        // Se não conseguiu converter, tentar outros formatos
+                                        else {
+                                            const testDate = new Date(cleanDateStr);
+                                            if (!isNaN(testDate.getTime()) && testDate.getFullYear() > 1900 && testDate.getFullYear() < 2100) {
+                                                installDateStr = testDate.toLocaleDateString('pt-BR', {
+                                                    day: '2-digit', 
+                                                    month: '2-digit', 
+                                                    year: 'numeric'
+                                                });
+                                            }
+                                        }
+                                    }
+                                    // Se for objeto Date do Excel
+                                    else if (row.installDate instanceof Date && !isNaN(row.installDate.getTime())) {
+                                        installDateStr = row.installDate.toLocaleDateString('pt-BR', {
+                                            day: '2-digit', 
+                                            month: '2-digit', 
+                                            year: 'numeric'
+                                        });
+                                    }
+                                }
+                                
+                                const clientData = {
+                                    clientNumber: row.id_col || 'N/A',
+                                    name: row.name || 'Não informado',
+                                    address: row.address || 'Não informado',
+                                    installDate: installDateStr, // Sempre string no formato DD/MM/YYYY ou vazio
+                                    panels: row.panels || 0,
+                                    power: row.power || 0,
+                                    status: 'new',
+                                    createdAt: serverTimestamp()
+                                };
+
+                                const clientsRef = collection(db, `solar-clients/${userId}/clients`);
+                                const q = query(clientsRef, 
+                                    where("clientNumber", "==", clientData.clientNumber)
+                                );
+                                const existingClients = await getDocs(q);
+                                
+                                let clientId;
+                                let isNewClient = true;
+                                
+                                if (!existingClients.empty) {
+                                    const existingDoc = existingClients.docs[0];
+                                    clientId = existingDoc.id;
+                                    await setDoc(existingDoc.ref, { 
+                                        ...clientData,
+                                        createdAt: existingDoc.data().createdAt || serverTimestamp()
+                                    }, { merge: true });
+                                    isNewClient = false;
+                                } else {
+                                    const newClientRef = await addDoc(clientsRef, clientData);
+                                    clientId = newClientRef.id;
+                                }
+                                
+                                const historyRef = collection(db, `solar-clients/${userId}/clients/${clientId}/history`);
+                                await addDoc(historyRef, {
+                                    event: isNewClient ? "Cliente importado da planilha." : "Dados do cliente atualizados via planilha.",
+                                    timestamp: serverTimestamp()
+                                });
+                                
+                                successCount++;
+                                setProcessedCount(successCount);
+                                
+                            } catch (rowError) {
+                                console.error(`Erro ao processar linha ${errorCount + successCount + 1}:`, rowError);
+                                errorCount++;
+                            }
+                        }
+
+                        setIsProcessing(false);
+                        
+                        if (successCount > 0) {
+                            setSuccess(`✅ ${successCount} cliente(s) importado(s) com sucesso!`);
+                            if (errorCount === 0) {
+                                setTimeout(() => setActiveTab('clients'), 2000);
+                            }
+                        }
+                        
+                        if (errorCount > 0) {
+                            setError(`⚠️ ${errorCount} linha(s) com erro. ${successCount} importadas com sucesso.`);
+                        }
+                    } catch (err) {
+                        console.error("Erro ao processar o arquivo:", err);
+                        setError(`Falha ao ler o arquivo: ${err.message}. Verifique o formato e tente novamente.`);
+                        setIsProcessing(false);
+                    }
+                };
+                reader.onerror = () => {
+                    setError("Não foi possível ler o arquivo.");
+                    setIsProcessing(false);
+                };
+                reader.readAsArrayBuffer(file);
+            };
+
+            return (
+                <div className="max-w-xl mx-auto bg-white p-8 rounded-lg shadow text-center">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-2">Importar Planilha de Clientes</h2>
+                    <p className="text-gray-600 mb-6">Selecione um arquivo Excel (.xlsx) com os dados dos seus clientes.</p>
+                    
+                    <label htmlFor="file-upload" className="w-full cursor-pointer inline-flex justify-center items-center px-6 py-3 border border-gray-300 shadow-sm text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+                        📁 {isProcessing ? `Processando... (${processedCount} processados)` : (fileName || "Escolher Arquivo")}
+                    </label>
+                    <input
+                        id="file-upload"
+                        type="file"
+                        className="sr-only"
+                        accept=".xlsx"
+                        onChange={handleFileUpload}
+                        disabled={isProcessing}
+                    />
+
+                    {error && <p className="text-red-500 mt-4">{error}</p>}
+                    {success && <p className="text-green-500 mt-4">{success}</p>}
+
+                    <div className="mt-8 text-left text-sm text-gray-500 bg-gray-50 p-4 rounded-md">
+                        <h4 className="font-semibold text-gray-700 mb-2">Ordem das Colunas na Planilha:</h4>
+                        <p>Para que a importação funcione, sua planilha deve seguir esta ordem de colunas:</p>
+                        <ul className="list-disc list-inside mt-2">
+                            <li>Coluna A: N° (Número do Cliente)</li>
+                            <li>Coluna B: DATA</li>
+                            <li>Coluna C: NOME</li>
+                            <li>Coluna D: ENDERECO</li>
+                            <li>Coluna E: N° PLACA</li>
+                            <li>Coluna F: POTENCIA</li>
+                        </ul>
+                    </div>
+                </div>
+            );
+        };
+        
+        const ClientDetailModal = ({ client, onClose, userId }) => {
+            const [history, setHistory] = useState([]);
+            const [loadingHistory, setLoadingHistory] = useState(true);
+            const [selectedStatus, setSelectedStatus] = useState('');
+
+            useEffect(() => {
+                const { getFirestore, collection, query, onSnapshot } = window.firebase;
+                const db = getFirestore();
+                const q = query(collection(db, `solar-clients/${userId}/clients/${client.id}/history`));
+
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const historyData = [];
+                    snapshot.forEach(doc => {
+                        const itemData = doc.data();
+                        const timestamp = itemData.timestamp ? new Date(itemData.timestamp.seconds * 1000).toLocaleString('pt-BR') : 'Data pendente';
+                        historyData.push({ id: doc.id, ...itemData, timestamp });
+                    });
+                    historyData.sort((a, b) => (b.timestamp?.toDate?.() || 0) - (a.timestamp?.toDate?.() || 0));
+                    setHistory(historyData);
+                    setLoadingHistory(false);
+                });
+
+                return () => unsubscribe();
+            }, [client.id, userId]);
+
+            const handleUpdateStatus = async () => {
+                if (!selectedStatus) return;
+
+                const { getFirestore, doc, updateDoc, collection, addDoc, serverTimestamp } = window.firebase;
+                const db = getFirestore();
+                const clientRef = doc(db, `solar-clients/${userId}/clients`, client.id);
+
+                const statusLabels = {
+                    'monitoring': 'Monitoramento',
+                    'recurring_maintenance': 'Manutenção Recorrente',
+                    'om_complete': 'O&M Completo',
+                    'expired': 'Garantia Expirada (sem serviços)'
+                };
+
+                try {
+                    await updateDoc(clientRef, { status: selectedStatus });
+                    
+                    const historyRef = collection(db, `solar-clients/${userId}/clients/${client.id}/history`);
+                    await addDoc(historyRef, {
+                        event: `Status alterado para: ${statusLabels[selectedStatus]}`,
+                        timestamp: serverTimestamp()
+                    });
+                    onClose();
+                } catch (error) {
+                    console.error("Erro ao atualizar status:", error);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-full overflow-y-auto">
+                        <div className="p-6">
+                            <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-xl font-bold text-gray-900">
+                                    {client.clientNumber ? `${client.clientNumber} - ` : ''}{client.name}
+                                </h2>
+                                <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm mb-6">
+                                <p><strong>Endereço:</strong> {client.address}</p>
+                                <p><strong>Data Instalação:</strong> {client.installDate}</p>
+                                <p><strong>Nº de Placas:</strong> {client.panels}</p>
+                                <p><strong>Potência:</strong> {client.power} kWp</p>
+                            </div>
+
+                            <div className="mb-6 p-4 bg-gray-50 rounded-md">
+                                <h3 className="text-lg font-semibold text-gray-800 mb-3">Gerenciar Status do Cliente</h3>
+                                
+                                {client.status === 'active' && (
+                                    <p className="text-sm text-green-700 font-semibold">✅ Cliente com garantia ativa (dentro do prazo de 1 ano).</p>
+                                )}
+                                
+                                {['expired', 'monitoring', 'recurring_maintenance', 'om_complete'].includes(client.status) && (
+                                    <div className="space-y-3">
+                                        <p className="text-sm text-gray-600">
+                                            {client.status === 'expired' 
+                                                ? 'Cliente com garantia expirada. Defina o tipo de monitoramento/manutenção:' 
+                                                : 'Alterar tipo de monitoramento/manutenção:'
+                                            }
+                                        </p>
+                                        
+                                        <div className="flex flex-col sm:flex-row gap-2">
+                                            <select 
+                                                value={selectedStatus}
+                                                onChange={(e) => setSelectedStatus(e.target.value)}
+                                                className="flex-1 p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                                            >
+                                                <option value="">Selecione uma opção...</option>
+                                                <option value="monitoring">Monitoramento Básico</option>
+                                                <option value="recurring_maintenance">Manutenção Recorrente</option>
+                                                <option value="om_complete">O&M Completo</option>
+                                                <option value="expired">Sem Serviços (Expirado)</option>
+                                            </select>
+                                            
+                                            <button 
+                                                onClick={handleUpdateStatus}
+                                                disabled={!selectedStatus}
+                                                className="px-4 py-2 bg-indigo-600 text-white rounded-md font-semibold hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                                            >
+                                                Atualizar
+                                            </button>
+                                        </div>
+                                        
+                                        <div className="text-xs text-gray-500 space-y-1">
+                                            <p><strong>Monitoramento:</strong> Acompanhamento básico de performance</p>
+                                            <p><strong>Manutenção Recorrente:</strong> Limpeza e manutenções preventivas periódicas</p>
+                                            <p><strong>O&M Completo:</strong> Operação e manutenção completa do sistema</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div>
+                                <h3 className="text-lg font-semibold text-gray-800 mb-2">Histórico do Cliente</h3>
+                                {loadingHistory ? <p>Carregando histórico...</p> : (
+                                    <ul className="space-y-2">
+                                        {history.map(item => (
+                                            <li key={item.id} className="bg-gray-50 p-3 rounded-md text-sm">
+                                                <p className="font-medium text-gray-700">{item.event}</p>
+                                                <p className="text-xs text-gray-500">{item.timestamp}</p>
+                                            </li>
+                                        ))}
+                                        {history.length === 0 && <p className="text-sm text-gray-500">Nenhum histórico registrado.</p>}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Renderização do App ---
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
