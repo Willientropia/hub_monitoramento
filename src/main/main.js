@@ -6,7 +6,7 @@ function createWindow() {
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false
@@ -14,7 +14,7 @@ function createWindow() {
     title: 'Hub de Monitoramento'
   });
 
-  win.loadFile('src/index.html');
+  win.loadFile('src/renderer/index.html');
   
   // Abrir DevTools em desenvolvimento
   // win.webContents.openDevTools();
