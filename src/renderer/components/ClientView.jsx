@@ -1,50 +1,25 @@
-const { useState, useMemo } = React;
+const { useState, useCallback } = React;
 
 const ClientView = ({ clients, userId }) => {
-    const [searchTerm, setSearchTerm] = useState('');
-    const [filterStatus, setFilterStatus] = useState('all');
     const [selectedClient, setSelectedClient] = useState(null);
+    const [filteredClients, setFilteredClients] = useState(clients);
+    const [currentFilters, setCurrentFilters] = useState({});
 
-    const filteredClients = useMemo(() => {
-        return clients.filter(client => {
-            const name = typeof client.name === 'string' ? client.name : '';
-            const address = typeof client.address === 'string' ? client.address : '';
-            const clientNumber = String(client.clientNumber || '');
-            const searchLower = searchTerm.toLowerCase();
-            
-            const matchesSearch = name.toLowerCase().includes(searchLower) ||
-                                address.toLowerCase().includes(searchLower) ||
-                                clientNumber.toLowerCase().includes(searchLower);
-            const matchesFilter = filterStatus === 'all' || client.status === filterStatus;
-            return matchesSearch && matchesFilter;
-        }).sort((a, b) => {
-            // Ordena por número do cliente (clientNumber)
-            const numA = parseInt(String(a.clientNumber || '0')) || 0;
-            const numB = parseInt(String(b.clientNumber || '0')) || 0;
-            return numA - numB;
-        });
-    }, [clients, searchTerm, filterStatus]);
+    // Callback para receber dados filtrados do componente AdvancedFilter
+    const handleFilterChange = useCallback((filtered, filters) => {
+        setFilteredClients(filtered);
+        setCurrentFilters(filters);
+    }, []);
 
     return (
         <div className="space-y-6">
-            <div className="md:flex justify-between items-center space-y-4 md:space-y-0">
-                <input
-                    type="text"
-                    placeholder="🔍 Buscar por nº, nome ou endereço..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full md:w-1/3 p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
-                />
-                <div className="flex space-x-2 overflow-x-auto pb-2">
-                    <FilterButton current={filterStatus} status="all" setStatus={setFilterStatus}>Todos</FilterButton>
-                    <FilterButton current={filterStatus} status="active" setStatus={setFilterStatus}>Em Garantia</FilterButton>
-                    <FilterButton current={filterStatus} status="expired" setStatus={setFilterStatus}>Expirada</FilterButton>
-                    <FilterButton current={filterStatus} status="monitoring" setStatus={setFilterStatus}>Monitoramento</FilterButton>
-                    <FilterButton current={filterStatus} status="recurring_maintenance" setStatus={setFilterStatus}>Manutenção Recorrente</FilterButton>
-                    <FilterButton current={filterStatus} status="om_complete" setStatus={setFilterStatus}>O&M Completo</FilterButton>
-                </div>
-            </div>
+            {/* Componente de Filtros Avançados */}
+            <AdvancedFilter 
+                clients={clients} 
+                onFilterChange={handleFilterChange}
+            />
             
+            {/* Resultados */}
             {filteredClients.length > 0 ? (
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
                     {filteredClients.map(client => (
@@ -53,10 +28,55 @@ const ClientView = ({ clients, userId }) => {
                 </div>
             ) : (
                 <div className="text-center py-12 bg-white rounded-lg shadow">
-                    <p className="text-gray-500">Nenhum cliente encontrado com os filtros atuais.</p>
+                    <div className="space-y-4">
+                        <div className="text-6xl">🔍</div>
+                        <div>
+                            <h3 className="text-lg font-medium text-gray-900 mb-2">
+                                Nenhum cliente encontrado
+                            </h3>
+                            <p className="text-gray-500">
+                                {currentFilters.search ? 
+                                    `Nenhum resultado para "${currentFilters.search}"` : 
+                                    'Tente ajustar os filtros para ver mais resultados.'
+                                }
+                            </p>
+                        </div>
+                        
+                        {(currentFilters.search || 
+                          currentFilters.status !== 'all' || 
+                          currentFilters.city !== 'all' || 
+                          currentFilters.dataCompleteness !== 'all') && (
+                            <div className="text-sm text-gray-400">
+                                <p>Filtros ativos:</p>
+                                <div className="flex flex-wrap justify-center gap-2 mt-2">
+                                    {currentFilters.search && (
+                                        <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">
+                                            Busca: "{currentFilters.search}"
+                                        </span>
+                                    )}
+                                    {currentFilters.status !== 'all' && (
+                                        <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">
+                                            Status: {currentFilters.status}
+                                        </span>
+                                    )}
+                                    {currentFilters.city !== 'all' && (
+                                        <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs">
+                                            Cidade: {currentFilters.city}
+                                        </span>
+                                    )}
+                                    {currentFilters.dataCompleteness !== 'all' && (
+                                        <span className="px-2 py-1 bg-orange-100 text-orange-800 rounded text-xs">
+                                            {currentFilters.dataCompleteness === 'incomplete' ? 'Dados Incompletos' : 'Dados Completos'}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 
+            {/* Modal de Detalhes */}
             {selectedClient && (
                  <ClientDetailModal 
                     client={selectedClient} 
