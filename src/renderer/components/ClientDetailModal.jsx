@@ -11,12 +11,12 @@ const ClientDetailModal = ({ client, onClose, userId }) => {
     // Inicializar dados de edição quando o modal abrir
     useEffect(() => {
         setEditData({
-            clientNumber: client.clientNumber || '',
-            name: client.name || '',
-            address: client.address || '',
-            installDate: client.installDate || '',
-            panels: client.panels || '',
-            power: client.power || ''
+            clientNumber: String(client.clientNumber || ''),
+            name: String(client.name || ''),
+            address: String(client.address || ''),
+            installDate: String(client.installDate || ''),
+            panels: String(client.panels || ''),
+            power: String(client.power || '')
         });
     }, [client]);
 
@@ -126,10 +126,10 @@ const ClientDetailModal = ({ client, onClose, userId }) => {
 
             // Preparar dados para atualização
             const updateData = {
-                clientNumber: editData.clientNumber.trim(),
-                name: editData.name.trim(),
-                address: editData.address.trim(),
-                installDate: editData.installDate.trim(),
+                clientNumber: String(editData.clientNumber || '').trim(),
+                name: String(editData.name || '').trim(),
+                address: String(editData.address || '').trim(),
+                installDate: String(editData.installDate || '').trim(),
                 panels: editData.panels ? parseInt(editData.panels) : 0,
                 power: editData.power ? parseFloat(editData.power) : 0,
                 updatedAt: serverTimestamp()
